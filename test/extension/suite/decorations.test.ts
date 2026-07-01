@@ -205,5 +205,6 @@ suite("Editor Decorations", () => {
         assert.ok(configProps["weAudit.ownNoteColor"], "ownNoteColor should be configured");
         assert.ok(configProps["weAudit.otherNoteColor"], "otherNoteColor should be configured");
         assert.ok(configProps["weAudit.auditedColor"], "auditedColor should be configured");
+        assert.ok(configProps["weAudit.prAddedColor"], "prAddedColor should be configured");
     });
 });

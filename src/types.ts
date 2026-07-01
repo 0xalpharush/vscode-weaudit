@@ -89,6 +89,8 @@ export interface SerializedData {
     auditedFiles: AuditedFile[];
     // older versions do not have partiallyAuditedFiles
     partiallyAuditedFiles?: PartiallyAuditedFile[];
+    // older versions do not have reviewList
+    reviewList?: ReviewListItem[];
     resolvedEntries: Entry[];
     // optional code quality issue number for the workspace root
     codeQualityIssueNumber?: number;
@@ -106,6 +108,8 @@ export interface FullSerializedData {
     auditedFiles: AuditedFile[];
     // older versions do not have partiallyAuditedFiles
     partiallyAuditedFiles?: PartiallyAuditedFile[];
+    // older versions do not have reviewList
+    reviewList?: ReviewListItem[];
     resolvedEntries: FullEntry[];
     // optional code quality issue number for the workspace root
     codeQualityIssueNumber?: number;
@@ -122,6 +126,7 @@ export function createDefaultSerializedData(): SerializedData {
         treeEntries: [],
         auditedFiles: [],
         partiallyAuditedFiles: [],
+        reviewList: [],
         resolvedEntries: [],
     };
 }
@@ -144,6 +149,13 @@ export function validateSerializedData(data: SerializedData): boolean {
     if (data.partiallyAuditedFiles) {
         for (const partiallyAuditedFile of data.partiallyAuditedFiles) {
             if (!validatepartiallyAuditedFile(partiallyAuditedFile)) {
+                return false;
+            }
+        }
+    }
+    if (data.reviewList) {
+        for (const reviewListItem of data.reviewList) {
+            if (!validateReviewListItem(reviewListItem)) {
                 return false;
             }
         }
@@ -183,6 +195,34 @@ function validateAuditedFile(auditedFile: AuditedFile): boolean {
 
 function validatepartiallyAuditedFile(partiallyAuditedFile: PartiallyAuditedFile): boolean {
     return validateAuditedFile(partiallyAuditedFile) && partiallyAuditedFile.startLine !== undefined && partiallyAuditedFile.endLine !== undefined;
+}
+
+/**
+ * Validates a persisted review-list item.
+ * @param reviewListItem the review-list item to validate
+ * @returns true if the item has the required persisted fields
+ */
+function validateReviewListItem(reviewListItem: ReviewListItem): boolean {
+    if (reviewListItem.path === undefined || reviewListItem.author === undefined || typeof reviewListItem.completed !== "boolean") {
+        return false;
+    }
+    if (reviewListItem.addedRanges !== undefined) {
+        for (const range of reviewListItem.addedRanges) {
+            if (!validateReviewListLineRange(range)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * Validates a persisted PR-added line range for a review list item.
+ * @param range the line range to validate
+ * @returns true if the range uses zero-based, end-exclusive line numbers
+ */
+function validateReviewListLineRange(range: ReviewListLineRange): boolean {
+    return typeof range.startLine === "number" && typeof range.endLine === "number" && range.startLine >= 0 && range.endLine >= range.startLine;
 }
 
 function validateLocation(location: Location): boolean {
@@ -429,6 +469,16 @@ function partiallyAuditedEquals(a: PartiallyAuditedFile, b: PartiallyAuditedFile
 }
 
 /**
+ * Checks if two review list items refer to the same reviewer and file.
+ * @param a the first review list item
+ * @param b the second review list item
+ * @returns true if both items refer to the same review target
+ */
+function reviewListItemEquals(a: ReviewListItem, b: ReviewListItem): boolean {
+    return a.path === b.path && a.author === b.author;
+}
+
+/**
  * Merges two arrays of audited files, removing duplicates.
  * @param a the first array
  * @param b the second array
@@ -478,6 +528,29 @@ export function mergeTwoPartiallyAuditedFileArrays(a: PartiallyAuditedFile[], b:
     return result;
 }
 
+/**
+ * Merges two arrays of review list items, removing duplicate reviewer/file pairs.
+ * @param a the first array
+ * @param b the second array
+ * @returns the merged array
+ */
+export function mergeTwoReviewListItemArrays(a: ReviewListItem[], b: ReviewListItem[]): ReviewListItem[] {
+    const result: ReviewListItem[] = [...a];
+    for (let i = 0; i < b.length; i++) {
+        let found = false;
+        for (let j = 0; j < a.length; j++) {
+            if (reviewListItemEquals(a[j], b[i])) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            result.push(b[i]);
+        }
+    }
+    return result;
+}
+
 export interface AuditedFile {
     path: string;
     author: string;
@@ -488,6 +561,25 @@ export interface PartiallyAuditedFile {
     author: string;
     startLine: number;
     endLine: number;
+}
+
+export interface ReviewListLineRange {
+    // Zero-based, end-exclusive line range in the current file revision.
+    startLine: number;
+    endLine: number;
+}
+
+export interface ReviewListItem {
+    path: string;
+    author: string;
+    completed: boolean;
+    completedAt?: string;
+    addedRanges?: ReviewListLineRange[];
+}
+
+export interface FullReviewListItem extends ReviewListItem {
+    rootPath: string;
+    rootLabel: string;
 }
 
 export enum TreeViewMode {

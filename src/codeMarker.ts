@@ -7,6 +7,8 @@ import { spawnSync } from "child_process";
 import { plot } from "asciichart";
 
 import { ResolvedEntries } from "./resolvedFindings";
+import { ReviewList } from "./reviewList";
+import { parseReviewListItemsFromGitDiff } from "./reviewListDiff";
 import { labelAfterFirstLineTextDecoration, hoverOnLabel, DecorationManager } from "./decorationManager";
 import { activateFindingBoundaryCodeLens } from "./findingBoundaryCodeLens";
 import {
@@ -43,6 +45,10 @@ import {
     PartiallyAuditedFile,
     mergeTwoPartiallyAuditedFileArrays,
     FullSerializedData,
+    FullReviewListItem,
+    ReviewListItem,
+    ReviewListLineRange,
+    mergeTwoReviewListItemArrays,
     ConfigurationEntry,
     WorkspaceRootEntry,
     configEntryEquals,
@@ -54,6 +60,14 @@ export const SERIALIZED_FILE_EXTENSION = ".weaudit";
 const DAY_LOG_FILENAME = ".weauditdaylog";
 
 /**
+ * Reads the configured weAudit username, falling back to the OS username.
+ * @returns the username to use for persisted local review state
+ */
+function getConfiguredUsername(): string {
+    return vscode.workspace.getConfiguration("weAudit").get("general.username") || userInfo().username;
+}
+
+/**
  * Class representing a WeAudit workspace root. Each root maintains its own set of
  * configuration files (configs) with clientRemote, gitRemote, gitSha, treeEntries, auditedFiles,
  * and resolvedEntries. Additionally, it maintains a markedFilesDayLog.
@@ -61,6 +75,7 @@ const DAY_LOG_FILENAME = ".weauditdaylog";
 class WARoot {
     private auditedFiles: AuditedFile[];
     private partiallyAuditedFiles: PartiallyAuditedFile[];
+    private reviewList: ReviewListItem[];
     readonly rootPath: string;
     private rootLabel: string;
     public gitRemote: string;
@@ -84,6 +99,7 @@ class WARoot {
     constructor(wsPath: string, wsLabel: string) {
         this.auditedFiles = [];
         this.partiallyAuditedFiles = [];
+        this.reviewList = [];
         this.rootPath = wsPath;
         this.rootLabel = wsLabel;
         if (this.rootLabel === "") {
@@ -100,7 +116,7 @@ class WARoot {
         this.markedFilesDayLog = new Map<string, string[]>();
         this.loadDayLogFromFile();
 
-        this.username = vscode.workspace.getConfiguration("weAudit").get("general.username") || userInfo().username;
+        this.username = getConfiguredUsername();
         this.configs = [];
         this.currentlySelectedConfigs = [];
         this.loadConfigurations();
@@ -619,6 +635,87 @@ class WARoot {
     }
 
     /**
+     * Concatenates review-list items to the review list of this workspace root.
+     * @param items The review-list items to append.
+     */
+    concatReviewList(items: ReviewListItem[]): void {
+        this.reviewList = this.reviewList.concat(items);
+    }
+
+    /**
+     * Removes review-list items owned by a specific username.
+     * @param username The username whose review-list entries need to be removed.
+     */
+    filterReviewList(username: string): void {
+        this.reviewList = this.reviewList.filter((entry) => entry.author !== username);
+    }
+
+    /**
+     * Gets review-list items with workspace-root metadata for the tree view.
+     * @returns the full review-list items for this workspace root
+     */
+    getReviewListItems(): FullReviewListItem[] {
+        return this.reviewList.map((item) => ({
+            ...item,
+            rootPath: this.rootPath,
+            rootLabel: this.rootLabel,
+        }));
+    }
+
+    /**
+     * Gets PR-added line ranges for a file in this workspace root.
+     * @param filePath The workspace-relative file path.
+     * @returns zero-based, end-exclusive line ranges added by the PR.
+     */
+    getReviewListAddedRanges(filePath: string): ReviewListLineRange[] {
+        return this.reviewList
+            .filter((item) => item.path === filePath)
+            .flatMap((item) => item.addedRanges ?? [])
+            .sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
+    }
+
+    /**
+     * Replaces the current user's review list while preserving completed state by file path.
+     * @param items The newly generated review-list items.
+     */
+    setReviewListItems(items: ReviewListItem[]): void {
+        const previousItems = new Map(this.reviewList.filter((item) => item.author === this.username).map((item) => [item.path, item]));
+        const newItems = items.map((item) => {
+            const previous = previousItems.get(item.path);
+            const completed = previous?.completed ?? item.completed;
+            return {
+                ...item,
+                author: this.username,
+                completed,
+                completedAt: completed ? (previous?.completedAt ?? item.completedAt) : undefined,
+            } as ReviewListItem;
+        });
+        this.reviewList = this.reviewList.filter((item) => item.author !== this.username).concat(newItems);
+    }
+
+    /**
+     * Clears the current user's review-list items for this workspace root.
+     */
+    clearReviewList(): void {
+        this.reviewList = this.reviewList.filter((item) => item.author !== this.username);
+    }
+
+    /**
+     * Toggles a review-list item's completion state.
+     * @param pathToToggle The workspace-relative file path to toggle.
+     * @returns the new completed state, or undefined if the item was not found
+     */
+    toggleReviewListItem(pathToToggle: string): boolean | undefined {
+        const item = this.reviewList.find((entry) => entry.author === this.username && entry.path === pathToToggle);
+        if (item === undefined) {
+            return undefined;
+        }
+        item.completed = !item.completed;
+        item.completedAt = item.completed ? new Date().toISOString() : undefined;
+        return item.completed;
+    }
+
+    /**
      * Checks whether the file at a particular path is in the AuditedFiles of this workspace root.
      * @param path The path of the file to be checked.
      * @returns `true` if the file is in the AuditedFiles, `false` if not.
@@ -938,6 +1035,7 @@ class WARoot {
         // filter local entries of the affected user
         let filteredAuditedFiles = this.auditedFiles.filter((file) => file.author === username);
         let filteredPartiallyAuditedEntries = this.partiallyAuditedFiles.filter((entry) => entry.author === username);
+        let filteredReviewList = this.reviewList.filter((entry) => entry.author === username);
 
         // get filtered entries from the CodeMarker
         const [filteredEntries, filteredResolvedEntries]: [FullEntry[], FullEntry[]] = await vscode.commands.executeCommand(
@@ -998,6 +1096,7 @@ class WARoot {
                         filteredPartiallyAuditedEntries,
                         previousEntries.partiallyAuditedFiles ?? [],
                     );
+                    filteredReviewList = mergeTwoReviewListItemArrays(filteredReviewList, previousEntries.reviewList ?? []);
                     reducedResolvedEntries = mergeTwoEntryArrays(reducedResolvedEntries, previousEntries.resolvedEntries);
                 }
             }
@@ -1010,6 +1109,7 @@ class WARoot {
             reducedEntries.length !== 0 ||
             filteredAuditedFiles.length !== 0 ||
             filteredPartiallyAuditedEntries.length !== 0 ||
+            filteredReviewList.length !== 0 ||
             reducedResolvedEntries.length !== 0
         ) {
             toCreateData = true;
@@ -1039,6 +1139,7 @@ class WARoot {
                 treeEntries: reducedEntries,
                 auditedFiles: filteredAuditedFiles,
                 partiallyAuditedFiles: filteredPartiallyAuditedEntries,
+                reviewList: filteredReviewList,
                 resolvedEntries: reducedResolvedEntries,
             };
             if (this.codeQualityIssueNumber !== undefined) {
@@ -1455,6 +1556,100 @@ class MultiRootManager {
     }
 
     /**
+     * Gets all loaded review-list items across workspace roots.
+     * @returns review-list items sorted by root and path
+     */
+    getReviewListItems(): FullReviewListItem[] {
+        return this.roots.flatMap((root) => root.getReviewListItems()).sort((a, b) => a.rootLabel.localeCompare(b.rootLabel) || a.path.localeCompare(b.path));
+    }
+
+    /**
+     * Creates a review list from the current branch's PR diff.
+     * @returns the workspace root path whose review list was updated
+     */
+    async createReviewListFromPr(): Promise<string | undefined> {
+        const wsRoot = this.roots.length === 1 ? this.roots[0] : await this.selectRoot();
+        if (wsRoot === undefined) {
+            return;
+        }
+
+        const baseRef = await vscode.window.showInputBox({
+            title: `Create PR review list for ${wsRoot.getRootLabel()}`,
+            prompt: "Base ref to compare with HEAD",
+            value: "origin/main",
+            ignoreFocusOut: true,
+        });
+        if (baseRef === undefined) {
+            return;
+        }
+
+        const diff = spawnSync("git", ["diff", "--no-color", "--no-ext-diff", "--unified=0", "--diff-filter=ACMRTUXB", `${baseRef}...HEAD`], {
+            cwd: wsRoot.rootPath,
+            encoding: "utf8",
+            maxBuffer: 32 * 1024 * 1024,
+        });
+        if (diff.error !== undefined || diff.status !== 0) {
+            const message = diff.error?.message || diff.stderr?.toString().trim() || diff.stdout?.toString().trim() || "unknown git error";
+            vscode.window.showErrorMessage(`weAudit: Failed to create review list from ${baseRef}: ${message}`);
+            return;
+        }
+
+        const reviewItemsByPath = new Map<string, ReviewListItem>();
+        for (const item of parseReviewListItemsFromGitDiff(diff.stdout, getConfiguredUsername())) {
+            const normalizedPath = normalizePathForOS(wsRoot.rootPath, item.path);
+            const existing = reviewItemsByPath.get(normalizedPath);
+            if (existing === undefined) {
+                reviewItemsByPath.set(normalizedPath, { ...item, path: normalizedPath });
+            } else {
+                existing.addedRanges = (existing.addedRanges ?? []).concat(item.addedRanges ?? []);
+            }
+        }
+
+        const reviewItems = Array.from(reviewItemsByPath.values()).sort((a, b) => a.path.localeCompare(b.path));
+        const addedLineCount = reviewItems.reduce(
+            (count, item) => count + (item.addedRanges ?? []).reduce((rangeCount, range) => rangeCount + range.endLine - range.startLine, 0),
+            0,
+        );
+
+        wsRoot.setReviewListItems(reviewItems);
+        void wsRoot.updateSavedData(getConfiguredUsername());
+        vscode.window.showInformationMessage(`weAudit: Created review list with ${reviewItems.length} files and ${addedLineCount} added lines.`);
+        return wsRoot.rootPath;
+    }
+
+    /**
+     * Toggles a review-list item and persists the updated state.
+     * @param item The review-list item selected in the tree view.
+     */
+    toggleReviewListItem(item: FullReviewListItem): void {
+        const [wsRoot] = this.getCorrespondingRootAndPath(item.rootPath);
+        if (wsRoot === undefined) {
+            vscode.window.showErrorMessage(`weAudit: Error updating review list item. Root ${item.rootPath} is not in the workspace.`);
+            return;
+        }
+        wsRoot.toggleReviewListItem(item.path);
+        void wsRoot.updateSavedData(getConfiguredUsername());
+    }
+
+    /**
+     * Clears the selected workspace root's review list.
+     * @returns the workspace root path whose review list was cleared
+     */
+    async clearReviewList(): Promise<string | undefined> {
+        const wsRoot = this.roots.length === 1 ? this.roots[0] : await this.selectRoot();
+        if (wsRoot === undefined) {
+            return;
+        }
+        const action = await vscode.window.showWarningMessage(`Clear PR review list for ${wsRoot.getRootLabel()}?`, { modal: true }, "Clear");
+        if (action !== "Clear") {
+            return;
+        }
+        wsRoot.clearReviewList();
+        void wsRoot.updateSavedData(getConfiguredUsername());
+        return wsRoot.rootPath;
+    }
+
+    /**
      * Given a configuration, checks whether it is selected
      * @param config the target configuration.
      * @returns true if it is selected, false if not.
@@ -1635,6 +1830,7 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
     readonly onDidChangeTreeData = this._onDidChangeTreeDataEmitter.event;
 
     private resolvedEntriesTree: ResolvedEntries;
+    private reviewList: ReviewList;
 
     private decorationManager: DecorationManager;
     private decorationsEnabled = true;
@@ -1660,9 +1856,12 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
 
         this.sortEntriesAlphabetically = this.loadSortEntriesConfiguration();
 
+        this.resolvedEntriesTree = new ResolvedEntries(context, this.resolvedEntries);
+        this.reviewList = new ReviewList(context);
+
         this.username = this.setUsernameConfigOrDefault();
         this.findAndLoadConfigurationUsernames();
-        this.resolvedEntriesTree = new ResolvedEntries(context, this.resolvedEntries);
+        this.refreshReviewList();
 
         vscode.commands.executeCommand("weAudit.refreshSavedFindings", this.workspaces.getSelectedConfigurations());
 
@@ -1739,6 +1938,27 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
 
         vscode.commands.registerCommand("weAudit.addPartiallyAudited", () => {
             this.addPartiallyAudited();
+        });
+
+        vscode.commands.registerCommand("weAudit.createReviewListFromPr", async () => {
+            await this.workspaces.createReviewListFromPr();
+            this.refreshReviewList();
+            this.decorate();
+        });
+
+        vscode.commands.registerCommand("weAudit.toggleReviewListItem", (item: FullReviewListItem) => {
+            this.workspaces.toggleReviewListItem(item);
+            this.refreshReviewList();
+        });
+
+        vscode.commands.registerCommand("weAudit.clearReviewList", async () => {
+            await this.workspaces.clearReviewList();
+            this.refreshReviewList();
+            this.decorate();
+        });
+
+        vscode.commands.registerCommand("weAudit.refreshReviewList", () => {
+            this.refreshReviewList();
         });
 
         vscode.commands.registerCommand("weAudit.toggleFindingsHighlighting", () => {
@@ -1935,6 +2155,7 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
             // refresh the currently selected files, findings tree and file decorations
             vscode.commands.executeCommand("weAudit.refreshSavedFindings", this.workspaces.getSelectedConfigurations());
             this.resolvedEntriesTree.setResolvedEntries(this.resolvedEntries);
+            this.refreshReviewList();
             this.refreshTree();
             this.decorate();
             if (!savedData) {
@@ -2077,7 +2298,7 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
     }
 
     public setUsernameConfigOrDefault(): string {
-        this.username = vscode.workspace.getConfiguration("weAudit").get("general.username") || userInfo().username;
+        this.username = getConfiguredUsername();
         return this.username;
     }
 
@@ -2973,7 +3194,7 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
             for (const root of this.workspaces.getRoots()) {
                 if (root !== wsRoot && root.gitRemote === wsRoot.gitRemote && root.codeQualityIssueNumber !== undefined) {
                     wsRoot.codeQualityIssueNumber = root.codeQualityIssueNumber;
-                    void wsRoot.updateSavedData(vscode.workspace.getConfiguration("weAudit").get("general.username") || userInfo().username);
+                    void wsRoot.updateSavedData(getConfiguredUsername());
                     break;
                 }
             }
@@ -3035,7 +3256,7 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
                     return;
                 }
                 wsRoot.codeQualityIssueNumber = Number(issueNumberStr);
-                void wsRoot.updateSavedData(vscode.workspace.getConfiguration("weAudit").get("general.username") || userInfo().username);
+                void wsRoot.updateSavedData(getConfiguredUsername());
                 // Fall through to the clipboard+comment flow for this first finding
             } else {
                 // "Enter existing issue number"
@@ -3054,7 +3275,7 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
                     return;
                 }
                 wsRoot.codeQualityIssueNumber = Number(issueNumberStr);
-                void wsRoot.updateSavedData(vscode.workspace.getConfiguration("weAudit").get("general.username") || userInfo().username);
+                void wsRoot.updateSavedData(getConfiguredUsername());
             }
         }
 
@@ -3136,7 +3357,7 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
         }
 
         wsRoot.codeQualityIssueNumber = issueNumberStr === "" ? undefined : Number(issueNumberStr);
-        void wsRoot.updateSavedData(vscode.workspace.getConfiguration("weAudit").get("general.username") || userInfo().username);
+        void wsRoot.updateSavedData(getConfiguredUsername());
 
         if (wsRoot.codeQualityIssueNumber !== undefined) {
             vscode.window.showInformationMessage(`Code Quality issue number set to #${wsRoot.codeQualityIssueNumber}.`);
@@ -3627,6 +3848,7 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
             auditedFiles: parsedEntries.auditedFiles,
             // older versions do not have partiallyAuditedFiles
             partiallyAuditedFiles: parsedEntries.partiallyAuditedFiles,
+            reviewList: parsedEntries.reviewList,
             resolvedEntries: parsedEntries.resolvedEntries.map(
                 (entry) =>
                     ({
@@ -3671,6 +3893,10 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
             partiallyAuditedFile.path = normalizePathForOS(rootPath, partiallyAuditedFile.path);
         });
 
+        fullParsedEntries.reviewList?.forEach((reviewListItem) => {
+            reviewListItem.path = normalizePathForOS(rootPath, reviewListItem.path);
+        });
+
         if (update) {
             if (add) {
                 // Remove potential entries of username which appear on the tree.
@@ -3691,6 +3917,7 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
                     );
                     wsRoot.filterAudited(config.username);
                     wsRoot.filterPartiallyAudited(config.username);
+                    wsRoot.filterReviewList(config.username);
                     this.resolvedEntries = this.resolvedEntries.filter(
                         (entry) =>
                             entry.author !== config.username ||
@@ -3706,6 +3933,9 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
                 if (fullParsedEntries.partiallyAuditedFiles !== undefined) {
                     wsRoot.concatPartiallyAudited(fullParsedEntries.partiallyAuditedFiles);
                 }
+                if (fullParsedEntries.reviewList !== undefined) {
+                    wsRoot.concatReviewList(fullParsedEntries.reviewList);
+                }
 
                 // handle older versions of the extension that don't have resolved entries
                 if (fullParsedEntries.resolvedEntries !== undefined) {
@@ -3719,6 +3949,7 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
                 );
                 wsRoot.filterAudited(config.username);
                 wsRoot.filterPartiallyAudited(config.username);
+                wsRoot.filterReviewList(config.username);
                 this.resolvedEntries = this.resolvedEntries.filter(
                     (entry) =>
                         entry.author !== config.username ||
@@ -3728,6 +3959,7 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
         }
 
         this.markPathMapDirty();
+        this.refreshReviewList();
 
         return fullParsedEntries;
     }
@@ -3819,6 +4051,26 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
     }
 
     /**
+     * Builds decorations for lines added by the PR review list in an editor.
+     * @param editor the editor whose document should be decorated
+     * @param rootsAndPaths workspace roots and corresponding relative paths for the editor
+     * @returns the ranges to highlight as PR-added code
+     */
+    private getPrAddedDecorations(editor: vscode.TextEditor, rootsAndPaths: [WARoot, string][]): vscode.Range[] {
+        const decorations: vscode.Range[] = [];
+        for (const [wsRoot, fname] of rootsAndPaths) {
+            for (const range of wsRoot.getReviewListAddedRanges(fname)) {
+                const startLine = Math.max(0, Math.min(range.startLine, editor.document.lineCount));
+                const endLine = Math.max(startLine, Math.min(range.endLine, editor.document.lineCount));
+                if (endLine > startLine) {
+                    decorations.push(new vscode.Range(startLine, 0, endLine, 0));
+                }
+            }
+        }
+        return decorations;
+    }
+
+    /**
      * Redecorates the given editor based on the current treeEntries
      *  - decorate each region with the region decoration type
      *  - decorate the first line of each entry with its description and author
@@ -3886,6 +4138,7 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
             }
         }
 
+        editor.setDecorations(this.decorationManager.prAddedDecorationType, this.getPrAddedDecorations(editor, allRootsAndPaths));
         editor.setDecorations(this.decorationManager.ownFindingDecorationType, ownDecorations);
         editor.setDecorations(this.decorationManager.otherFindingDecorationType, otherDecorations);
         editor.setDecorations(this.decorationManager.ownNoteDecorationType, ownNoteDecorations);
@@ -4245,6 +4498,13 @@ export class CodeMarker implements vscode.TreeDataProvider<TreeEntry> {
     refreshTree(): void {
         this.markPathMapDirty();
         this._onDidChangeTreeDataEmitter.fire();
+    }
+
+    /**
+     * Refreshes the PR review-list tree view from the loaded workspace state.
+     */
+    refreshReviewList(): void {
+        this.reviewList.setItems(this.workspaces.getReviewListItems());
     }
 
     /**

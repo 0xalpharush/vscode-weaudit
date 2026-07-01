@@ -58,6 +58,11 @@
                     "contextualTitle": "weAudit"
                 },
                 {
+                    "id": "reviewList",
+                    "name": "Review List",
+                    "contextualTitle": "weAudit"
+                },
+                {
                     "type": "webview",
                     "id": "gitConfig",
                     "name": "Repository Configuration",
@@ -276,6 +281,26 @@
             {
                 "command": "weAudit.editCodeQualityIssueNumber",
                 "title": "weAudit: Set Code Quality Issue Number"
+            },
+            {
+                "command": "weAudit.createReviewListFromPr",
+                "title": "weAudit: Create Review List from PR",
+                "icon": "$(list-tree)"
+            },
+            {
+                "command": "weAudit.toggleReviewListItem",
+                "title": "Toggle Review Item",
+                "icon": "$(check)"
+            },
+            {
+                "command": "weAudit.clearReviewList",
+                "title": "weAudit: Clear Review List",
+                "icon": "$(clear-all)"
+            },
+            {
+                "command": "weAudit.refreshReviewList",
+                "title": "Refresh Review List",
+                "icon": "$(refresh)"
             }
         ],
         "keybindings": [
@@ -442,6 +467,14 @@
                 {
                     "command": "weAudit.boundaryMoveDown",
                     "when": "false"
+                },
+                {
+                    "command": "weAudit.toggleReviewListItem",
+                    "when": "false"
+                },
+                {
+                    "command": "weAudit.refreshReviewList",
+                    "when": "false"
                 }
             ],
             "view/title": [
@@ -499,6 +532,21 @@
                     "command": "weAudit.openGithubIssueFromDetails",
                     "when": "view == findingDetails && weAudit.findingDetailsHasEntry",
                     "group": "navigation"
+                },
+                {
+                    "command": "weAudit.createReviewListFromPr",
+                    "when": "view == reviewList",
+                    "group": "navigation@0"
+                },
+                {
+                    "command": "weAudit.refreshReviewList",
+                    "when": "view == reviewList",
+                    "group": "navigation@1"
+                },
+                {
+                    "command": "weAudit.clearReviewList",
+                    "when": "view == reviewList",
+                    "group": "navigation@2"
                 }
             ],
             "view/item/context": [
@@ -551,6 +599,11 @@
                     "command": "weAudit.deleteResolvedFinding",
                     "when": "view == resolvedFindings",
                     "group": "inline@2"
+                },
+                {
+                    "command": "weAudit.toggleReviewListItem",
+                    "when": "view == reviewList",
+                    "group": "inline@1"
                 }
             ],
             "editor/context": [
@@ -621,6 +674,11 @@
                         "type": "string",
                         "default": "#00422355",
                         "description": "Background color for files marked as reviewed (write as #RGB, #RGBA, #RRGGBB or #RRGGBBAA)."
+                    },
+                    "weAudit.prAddedColor": {
+                        "type": "string",
+                        "default": "#2ea04333",
+                        "description": "Background color for code lines added by the current PR review list (write as #RGB, #RGBA, #RRGGBB or #RRGGBBAA)."
                     },
                     "weAudit.ownFindingColor": {
                         "type": "string",

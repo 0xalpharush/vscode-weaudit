@@ -15,6 +15,7 @@ export class DecorationManager {
     public ownNoteDecorationType;
     public otherNoteDecorationType;
     public auditedFileDecorationType;
+    public prAddedDecorationType;
 
     constructor(context: vscode.ExtensionContext) {
         this.gutterIconPath = vscode.Uri.file(context.asAbsolutePath(GUTTER_ICON_PATH));
@@ -24,6 +25,7 @@ export class DecorationManager {
         this.ownNoteDecorationType = this.loadOwnNoteDecorationConfiguration();
         this.otherNoteDecorationType = this.loadOtherNoteDecorationConfiguration();
         this.auditedFileDecorationType = this.loadAuditedDecorationConfiguration();
+        this.prAddedDecorationType = this.loadPrAddedDecorationConfiguration();
     }
 
     private createDecorationTypeWithString(color: string): vscode.TextEditorDecorationType {
@@ -92,6 +94,19 @@ export class DecorationManager {
     }
 
     /**
+     * Loads the decoration used to highlight lines added by a generated PR review list.
+     */
+    private loadPrAddedDecorationConfiguration(): vscode.TextEditorDecorationType {
+        const color: string | undefined = vscode.workspace.getConfiguration("weAudit").get("prAddedColor");
+        return vscode.window.createTextEditorDecorationType({
+            isWholeLine: true,
+            backgroundColor: color,
+            overviewRulerColor: this.withLessTransparentAlpha(color),
+            overviewRulerLane: vscode.OverviewRulerLane.Right,
+        });
+    }
+
+    /**
      * Reload all decoration configurations.
      * TODO: make it possible to reload only one decoration type
      */
@@ -103,12 +118,14 @@ export class DecorationManager {
         this.ownNoteDecorationType.dispose();
         this.otherNoteDecorationType.dispose();
         this.auditedFileDecorationType.dispose();
+        this.prAddedDecorationType.dispose();
 
         this.ownFindingDecorationType = this.loadOwnDecorationConfiguration();
         this.otherFindingDecorationType = this.loadOtherDecorationConfiguration();
         this.ownNoteDecorationType = this.loadOwnNoteDecorationConfiguration();
         this.otherNoteDecorationType = this.loadOtherNoteDecorationConfiguration();
         this.auditedFileDecorationType = this.loadAuditedDecorationConfiguration();
+        this.prAddedDecorationType = this.loadPrAddedDecorationConfiguration();
     }
 
     /**
@@ -119,6 +136,7 @@ export class DecorationManager {
         editor.setDecorations(this.otherFindingDecorationType, []);
         editor.setDecorations(this.ownNoteDecorationType, []);
         editor.setDecorations(this.otherNoteDecorationType, []);
+        editor.setDecorations(this.prAddedDecorationType, []);
     }
 }
 

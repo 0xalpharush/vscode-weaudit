@@ -30,6 +30,7 @@ See the [Build and install](#build-and-install) section below for how to build a
 -   [**Findings and Notes**](#findings-and-notes) - Bookmark regions of code to identify findings or to add audit notes.
 -   [**Audited Files**](#audited-files) - Mark an entire file as reviewed.
 -   [**Partially Audited Files**](#partially-audited-files) - Mark a region of code as reviewed.
+-   [**PR Review List**](#pr-review-list) - Create a checklist from a PR diff and highlight newly added lines.
 -   [**Detailed Findings**](#detailed-findings) - Fill detailed information about a finding.
 -   [**GitHub/Gitlab Issues**](#githubgitlab-issues) - Create formatted GitHub or Gitlab issues with the Detailed Findings information.
 -   [**Multi-region Findings**](#multi-region-findings) - Group multiple locations under a single finding.
@@ -86,6 +87,12 @@ The highlighted color can be customized in the [settings](#settings).
 #### Navigation Between Partially Audited Regions
 
 You can quickly navigate through all partially audited regions in your workspace using the `weAudit: Navigate to Next Partially Audited Region` command. This command will cycle through each partially audited region across all files, helping you efficiently review your progress.
+
+### PR Review List
+
+Create a checklist of files to review from the current branch by running `weAudit: Create Review List from PR` from the Command Palette or the _Review List_ view. The command compares `HEAD` against a base ref, defaults to `origin/main`, and stores the generated list in your `.weaudit` file.
+
+The _Review List_ view lets you open each file and toggle it between pending and reviewed. Lines added by the PR are highlighted in the editor while the review list is loaded.
 
 ### Detailed Findings
 
@@ -191,6 +198,7 @@ You can drag and drop findings and locations in the _List of Findings_ panel to:
 Each background color is customizable via the VSCode settings page. Write as #RGB, #RGBA, #RRGGBB or #RRGGBBAA:
 
 -   `weAudit.auditedColor`: Background color for files marked as audited
+-   `weAudit.prAddedColor`: Background color for lines added by the current PR review list
 -   `weAudit.{other,own}findingColor`: Background color for findings
 -   `weAudit.{other,own}noteColor`: Background color for notes
 

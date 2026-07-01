@@ -78,6 +78,18 @@ describe("validateSerializedData", () => {
             expect(validateSerializedData(data)).to.equal(true);
         });
 
+        it("accepts legacy data without reviewList field", () => {
+            const data: any = createValidSerializedData();
+            delete data.reviewList;
+            expect(validateSerializedData(data)).to.equal(true);
+        });
+
+        it("accepts review list items with added line ranges", () => {
+            const data = createDefaultSerializedData();
+            data.reviewList = [{ path: "src/review.ts", author: "testuser", completed: false, addedRanges: [{ startLine: 0, endLine: 3 }] }];
+            expect(validateSerializedData(data)).to.equal(true);
+        });
+
         it("accepts payload with empty string remotes", () => {
             const data = createDefaultSerializedData();
             data.clientRemote = "";

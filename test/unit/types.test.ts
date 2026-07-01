@@ -11,6 +11,7 @@ import {
     type FullLocationEntry,
     type PathOrganizerEntry,
     type PartiallyAuditedFile,
+    type ReviewListItem,
     type SerializedData,
     TreeViewMode,
     type WorkspaceRootEntry,
@@ -27,6 +28,7 @@ import {
     mergeTwoAuditedFileArrays,
     mergeTwoEntryArrays,
     mergeTwoPartiallyAuditedFileArrays,
+    mergeTwoReviewListItemArrays,
     treeViewModeLabel,
     validateSerializedData,
 } from "../../src/types";
@@ -42,6 +44,7 @@ describe("types.ts", () => {
             assert.deepStrictEqual(data.treeEntries, []);
             assert.deepStrictEqual(data.auditedFiles, []);
             assert.deepStrictEqual(data.partiallyAuditedFiles, []);
+            assert.deepStrictEqual(data.reviewList, []);
             assert.deepStrictEqual(data.resolvedEntries, []);
         });
     });
@@ -103,6 +106,7 @@ describe("types.ts", () => {
                 treeEntries: [createValidEntry()],
                 auditedFiles: [{ path: "src/test.ts", author: "testuser" }],
                 partiallyAuditedFiles: [{ path: "src/partial.ts", author: "testuser", startLine: 1, endLine: 50 }],
+                reviewList: [{ path: "src/review.ts", author: "testuser", completed: false, addedRanges: [{ startLine: 1, endLine: 3 }] }],
                 resolvedEntries: [],
             };
         }
@@ -177,6 +181,24 @@ describe("types.ts", () => {
             assert.strictEqual(validateSerializedData(data), true);
         });
 
+        it("should handle data without reviewList (backwards compatibility)", () => {
+            const data = createValidSerializedData();
+            delete data.reviewList;
+            assert.strictEqual(validateSerializedData(data), true);
+        });
+
+        it("should reject review list item missing completed", () => {
+            const data = createDefaultSerializedData();
+            data.reviewList = [{ path: "test.ts", author: "user" } as unknown as ReviewListItem];
+            assert.strictEqual(validateSerializedData(data), false);
+        });
+
+        it("should reject review list item with invalid added range", () => {
+            const data = createDefaultSerializedData();
+            data.reviewList = [{ path: "test.ts", author: "user", completed: false, addedRanges: [{ startLine: 3, endLine: 2 }] }];
+            assert.strictEqual(validateSerializedData(data), false);
+        });
+
         it("should validate Note entry type", () => {
             const data = createValidSerializedData();
             data.treeEntries[0].entryType = EntryType.Note;
@@ -200,6 +222,21 @@ describe("types.ts", () => {
             const data = createDefaultSerializedData();
             data.partiallyAuditedFiles = [{ path: "test.ts", author: "user" } as unknown as PartiallyAuditedFile];
             assert.strictEqual(validateSerializedData(data), false);
+        });
+    });
+
+    describe("mergeTwoReviewListItemArrays", () => {
+        it("should merge review list items without duplicates", () => {
+            const a = [{ path: "a.ts", author: "user", completed: false }];
+            const b = [
+                { path: "a.ts", author: "user", completed: true },
+                { path: "b.ts", author: "user", completed: false },
+            ];
+
+            assert.deepStrictEqual(mergeTwoReviewListItemArrays(a, b), [
+                { path: "a.ts", author: "user", completed: false },
+                { path: "b.ts", author: "user", completed: false },
+            ]);
         });
     });
 
